@@ -1,0 +1,1046 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>İç Denetim Süreci — Sahne Tabanlı Timeline</title>
+<style>
+/* =====================================================================
+   1. TEMEL DEĞİŞKENLER VE 16:9 SAHNE ÖLÇEKLEME (letterbox)
+   ===================================================================== */
+:root{
+  --sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --serif: Georgia, "EB Garamond", Garamond, "Times New Roman", serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --ease: cubic-bezier(.22,.7,.2,1);
+  --spring: cubic-bezier(.3,1.45,.5,1);
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:#000;overflow:hidden}
+body{font-family:var(--sans);color:#fff;-webkit-font-smoothing:antialiased}
+#stage{position:absolute;left:50%;top:50%;width:1920px;height:1080px;overflow:hidden;background:#05060b;
+  transform-origin:50% 50%;transform:translate(-50%,-50%) scale(.5)}
+#stage.idle{cursor:none}
+
+/* Katmanlar */
+.scene{position:absolute;inset:0;width:1920px;height:1080px;display:block;opacity:0;transition:opacity .95s var(--ease);z-index:1}
+.scene.show{opacity:1}
+#strip{position:absolute;left:0;top:0;width:1920px;height:1080px;z-index:5;pointer-events:none;transition:opacity .8s}
+#char{position:absolute;left:660px;top:566px;width:200px;height:400px;z-index:6;transition:opacity .8s}
+#char svg{overflow:visible;display:block}
+#hud{position:absolute;left:96px;top:64px;width:840px;z-index:7;transition:opacity .22s}
+#hud.out{opacity:0}
+#brand{position:absolute;right:96px;top:70px;z-index:7;font-size:18px;font-weight:600;letter-spacing:.3em;color:rgba(255,255,255,.5)}
+#brand span{color:rgba(255,255,255,.3);font-weight:400}
+#stage.in-finale #hud,#stage.in-finale #char,#stage.in-finale #strip{opacity:0}
+#stage.in-finale #strip .dot{pointer-events:none}
+
+/* =====================================================================
+   2. HUD TİPOGRAFİSİ (sol üst metin bloğu)
+   ===================================================================== */
+.sec-label{display:flex;align-items:center;gap:16px;font-size:19px;font-weight:600;letter-spacing:.28em;color:rgba(255,255,255,.66)}
+.sec-label .roman{color:var(--c)}
+.sec-label .dash{width:44px;height:1.5px;background:rgba(255,255,255,.4)}
+.bignum{display:flex;align-items:flex-start;gap:18px;margin-top:4px}
+.bignum .num{font-size:178px;font-weight:200;line-height:.92;letter-spacing:-.03em;color:#fff}
+.bignum .sup{display:flex;flex-direction:column;padding-top:20px}
+.bignum .sup small{font-size:15px;font-weight:600;letter-spacing:.26em;color:rgba(255,255,255,.55)}
+.bignum .sup b{font-size:46px;font-weight:300;line-height:1.1}
+.tag{display:flex;align-items:center;gap:14px;margin-top:24px;font-size:19px;font-weight:700;letter-spacing:.22em;color:var(--c)}
+.tag .ln{width:48px;height:2px;background:currentColor}
+#hud h1{font-size:58px;font-weight:750;line-height:1.08;letter-spacing:-.015em;margin:14px 0 0;max-width:820px}
+#hud p{font-size:29px;line-height:1.42;color:rgba(255,255,255,.62);margin:16px 0 0;max-width:740px}
+/* kelime kelime blur → netlik */
+.w{display:inline-block;animation:wIn .9s var(--ease) both;animation-delay:var(--d)}
+@keyframes wIn{from{opacity:0;filter:blur(12px);transform:translateY(10px)}}
+
+/* =====================================================================
+   3. TIMELINE ŞERİDİ (yer çizgisi + yaylar + noktalar)
+   ===================================================================== */
+.arc{fill:none;stroke-width:3;stroke-linecap:round;opacity:0;transition:opacity .6s}
+.arc.past{opacity:.3}
+.arc.cur{opacity:1}
+.dot{pointer-events:all;cursor:pointer}
+.dot .dcore{fill:rgba(255,255,255,.45);transition:fill .4s}
+.dot.past .dcore,.dot.cur .dcore{fill:var(--dc)}
+.dot text{fill:rgba(255,255,255,.42);font-size:17px;font-weight:500;letter-spacing:.04em;transition:fill .4s}
+.dot.cur text{fill:#fff}
+.dot:hover text{fill:#fff}
+.seclbl{font-size:15px;font-weight:700;letter-spacing:.22em}
+
+/* =====================================================================
+   4. KARAKTER ANİMASYONLARI (yürüme, göz kırpma, nefes)
+   ===================================================================== */
+.c-eyes{transform-box:fill-box;transform-origin:center;animation:blink 4.6s infinite}
+@keyframes blink{0%,93%,100%{transform:scaleY(1)}96%{transform:scaleY(.1)}}
+#char .c-leg,#char .c-arm-l{transform-box:fill-box;transform-origin:50% 4%}
+#char.walking .c-leg-l{animation:swing .5s ease-in-out infinite alternate}
+#char.walking .c-leg-r{animation:swing .5s ease-in-out infinite alternate-reverse}
+#char.walking .c-arm-l{animation:swing2 .5s ease-in-out infinite alternate-reverse}
+#char.walking .c-body{animation:bob .25s ease-in-out infinite alternate}
+#char:not(.walking) .c-body{animation:breathe 3.4s ease-in-out infinite}
+#char.face-left svg{transform:scaleX(-1)}
+@keyframes swing{from{transform:rotate(17deg)}to{transform:rotate(-17deg)}}
+@keyframes swing2{from{transform:rotate(13deg)}to{transform:rotate(-13deg)}}
+@keyframes bob{from{transform:translateY(0)}to{transform:translateY(-5px)}}
+@keyframes breathe{50%{transform:translateY(-1.5px)}}
+
+/* =====================================================================
+   5. SAHNE MİKRO ANİMASYONLARI
+   Kural: elemanın normal (animasyonsuz) hâli = son hâli.
+   Keyframe'ler "from" durumunu tanımlar; böylece reduced-motion'da
+   her şey son hâliyle görünür.
+   ===================================================================== */
+.fb {transform-box:fill-box;transform-origin:50% 50%}
+.fbl{transform-box:fill-box;transform-origin:0 50%}
+.fbt{transform-box:fill-box;transform-origin:50% 0}
+.fbb{transform-box:fill-box;transform-origin:50% 100%}
+.mono{font-family:var(--mono)}
+.dr{stroke-dasharray:1;stroke-dashoffset:0}
+.active .dr{animation:draw var(--t,.5s) ease-in-out both;animation-delay:var(--d,0s)}
+.active .popin{animation:pop .55s var(--spring) both;animation-delay:var(--d,0s)}
+.active .fadein{animation:fadeIn .5s ease both;animation-delay:var(--d,0s)}
+@keyframes draw{from{stroke-dashoffset:1}}
+@keyframes pop{from{opacity:0;transform:scale(.4)}}
+@keyframes fadeIn{from{opacity:0}}
+@keyframes fadeUp{from{opacity:0;transform:translateY(14px)}}
+
+/* S1 risk haritası */
+.active .hm-cell{animation:pop .5s var(--spring) both;animation-delay:var(--d)}
+.active .hm-cell.hot{animation:pop .5s var(--spring) both,hot 1.1s ease-in-out infinite;animation-delay:var(--d),calc(var(--d) + 1.3s)}
+.active .hm-t{animation:fadeIn .4s both;animation-delay:calc(var(--d) + .3s)}
+@keyframes hot{50%{opacity:.35}}
+.scan{opacity:0}
+.active .scan{animation:scan 1.9s .3s cubic-bezier(.45,0,.55,1) both}
+@keyframes scan{0%{opacity:.9;transform:translateY(0)}88%{opacity:.9}100%{opacity:0;transform:translateY(432px)}}
+.steam{opacity:.4;animation:steam 2.6s ease-in-out infinite;animation-delay:var(--d,0s)}
+@keyframes steam{0%{opacity:0;transform:translateY(8px)}50%{opacity:.6}100%{opacity:0;transform:translateY(-24px)}}
+.shaft{animation:shaft 5s ease-in-out infinite alternate}
+@keyframes shaft{from{opacity:.55}to{opacity:1}}
+
+/* S2 takvim / kontrol listesi / zarf */
+.cal-page{opacity:0}
+.active .cal-page{animation:flip .75s cubic-bezier(.5,0,.75,0) both;animation-delay:var(--d)}
+@keyframes flip{0%{opacity:1;transform:none}70%{opacity:1;transform:scaleY(.04)}100%{opacity:0;transform:scaleY(0)}}
+.active .cal-bar{animation:growX .8s var(--ease) both;animation-delay:var(--d)}
+@keyframes growX{from{transform:scaleX(0)}}
+.env{opacity:0}
+.active .env{animation:env 1.5s cubic-bezier(.5,0,.3,1) 3.1s both}
+@keyframes env{0%{opacity:1;transform:none}25%{opacity:1;transform:translateY(-22px) rotate(-3deg)}100%{opacity:0;transform:translate(300px,-560px) rotate(-18deg) scale(.45)}}
+.active .sent{animation:fadeUp .6s 4s both}
+
+/* S3 veri analizi */
+.active .rows{animation:rows 9s linear infinite}
+@keyframes rows{to{transform:translateY(-616px)}}
+.blip{animation:blip 1s ease-in-out infinite}
+@keyframes blip{50%{opacity:.3;transform:scale(1.7)}}
+.pulse{animation:pulse 1.6s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.55}}
+
+/* S4 örneklem */
+.sel{transform:translateY(-70px)}
+.active .sel{animation:lift .6s var(--spring) both;animation-delay:var(--d)}
+@keyframes lift{from{transform:translateY(0)}}
+.active .sel .outline,.active .sel .tagp{animation:fadeIn .4s both;animation-delay:var(--d)}
+.active .mag{animation:mag 6.5s ease-in-out infinite}
+@keyframes mag{0%,100%{transform:translate(0,0)}25%{transform:translate(270px,-12px)}50%{transform:translate(560px,8px)}75%{transform:translate(270px,4px)}}
+
+/* S5 kanıt / çalışma kâğıdı */
+.active .card{animation:cardIn .8s var(--ease) both;animation-delay:var(--d)}
+@keyframes cardIn{from{opacity:0;transform:translate(360px,-60px) rotate(10deg)}}
+.active .conn{animation:fadeIn .5s both;animation-delay:calc(var(--d) + .6s)}
+.stamp{transform:rotate(-7deg)}
+.active .stamp{animation:stamp .7s cubic-bezier(.3,.6,.4,1) 3s both}
+@keyframes stamp{0%{opacity:0;transform:translateY(-200px) rotate(-25deg) scale(1.5)}65%{opacity:1;transform:translateY(6px) rotate(-5deg) scale(.97)}100%{opacity:1;transform:rotate(-7deg)}}
+.active .paper5{animation:thud .35s 3.45s ease-out both}
+@keyframes thud{40%{transform:translateY(4px)}}
+
+/* S6-S7 toplantı / uzlaşma */
+.active .bubble{animation:pop .6s var(--spring) both;animation-delay:var(--d)}
+.active .item{animation:fadeRight .5s var(--ease) both;animation-delay:var(--d)}
+@keyframes fadeRight{from{opacity:0;transform:translateX(-14px)}}
+.wave{animation:wave .45s ease-in-out infinite alternate;animation-delay:var(--d)}
+@keyframes wave{from{transform:scaleY(.25)}}
+.active .slideL{animation:slideL .7s var(--ease) .7s both}
+.active .slideR{animation:slideR .7s var(--ease) .7s both}
+@keyframes slideL{from{opacity:0;transform:translateX(-70px)}}
+@keyframes slideR{from{opacity:0;transform:translateX(70px)}}
+.active .shake{animation:shake .22s ease-in-out 1.5s 6 alternate}
+@keyframes shake{from{transform:translateY(-6px)}to{transform:translateY(6px)}}
+.ring{animation:ring 2.2s ease-out infinite}
+@keyframes ring{from{opacity:.7;transform:scale(1)}to{opacity:0;transform:scale(1.45)}}
+
+/* S8 gece raporu */
+.typecover{transform:translateX(480px)}
+.active .typecover{animation:type var(--t,.55s) steps(24) both;animation-delay:var(--d)}
+@keyframes type{from{transform:translateX(0)}}
+.flicker{animation:flicker 4.5s infinite}
+@keyframes flicker{0%,100%{opacity:1}46%{opacity:.82}48%{opacity:1}51%{opacity:.9}}
+.twinkle{animation:twinkle 2.4s ease-in-out infinite alternate;animation-delay:var(--d)}
+@keyframes twinkle{to{opacity:.15}}
+.active .summary{animation:pop .6s var(--spring) 4s both}
+
+/* S9 sunum */
+.sweep{transform-box:view-box;transform-origin:1400px -40px;animation:sweep 6s ease-in-out infinite alternate}
+@keyframes sweep{from{transform:rotate(16deg)}to{transform:rotate(-18deg)}}
+.active .bar{animation:growY .8s var(--ease) both;animation-delay:var(--d)}
+@keyframes growY{from{transform:scaleY(0)}}
+.nod{animation:nod 3.4s ease-in-out infinite;animation-delay:var(--d)}
+@keyframes nod{0%,70%,100%{transform:none}80%{transform:translateY(5px)}}
+
+/* Duraklatma: sahne animasyonlarını dondur (metin kelimeleri hariç) */
+#stage.frozen .scene *:not(.w),#stage.frozen #finale *:not(.w){animation-play-state:paused!important}
+
+/* =====================================================================
+   6. AÇILIŞ VE KAPANIŞ KATMANLARI
+   ===================================================================== */
+#intro{position:absolute;inset:0;z-index:20;background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:opacity 1.1s var(--ease)}
+#intro.show{opacity:1;pointer-events:auto}
+.intro-text{font-family:var(--serif);font-style:italic;font-size:80px;color:#F1EDE4;letter-spacing:.005em}
+.intro-sub{margin-top:36px;font-size:17px;font-weight:600;letter-spacing:.36em;color:rgba(255,255,255,.38);opacity:0}
+#intro.active .intro-sub{animation:fadeIn 1s 1.6s both;opacity:1}
+#finale{position:absolute;inset:0;z-index:15;opacity:0;pointer-events:none;transition:opacity 1.2s var(--ease)}
+#finale.show{opacity:1;pointer-events:auto}
+#finale svg{position:absolute;inset:0}
+.fin-head{position:absolute;left:0;right:0;top:92px;text-align:center}
+.fin-kicker{font-size:17px;font-weight:600;letter-spacing:.34em;color:rgba(255,255,255,.45)}
+.fin-quote{margin-top:22px;font-family:var(--serif);font-style:italic;font-size:56px;color:#F1EDE4}
+#finale .w{animation:none}
+#finale.active .w{animation:wIn 1s var(--ease) both;animation-delay:var(--d)}
+#finale.active .pose{animation:rise .9s var(--ease) both;animation-delay:var(--d)}
+@keyframes rise{from{opacity:0;transform:translateY(40px)}}
+#finale .fdot{cursor:pointer}
+#finale .fdot:hover circle.core{r:9}
+
+/* =====================================================================
+   7. KONTROLLER VE İLERLEME ÇUBUĞU
+   ===================================================================== */
+#controls{position:absolute;right:96px;bottom:70px;z-index:30;display:flex;gap:6px;padding:8px;border-radius:999px;
+  background:rgba(12,14,24,.62);border:1px solid rgba(255,255,255,.12);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);transition:opacity .45s}
+#stage.idle #controls{opacity:0}
+#controls button{width:58px;height:58px;border:0;border-radius:50%;background:transparent;color:#fff;cursor:pointer;display:grid;place-items:center;transition:background .2s}
+#controls button:hover{background:rgba(255,255,255,.12)}
+#controls button:focus-visible{outline:2px solid #fff;outline-offset:2px}
+#controls svg{width:26px;height:26px;fill:currentColor}
+#progress{position:absolute;left:96px;right:96px;bottom:24px;height:4px;z-index:30;background:rgba(255,255,255,.14);border-radius:2px}
+#progress .fill{position:absolute;left:0;top:0;bottom:0;width:0;background:#fff;border-radius:2px}
+#progress .tick{position:absolute;top:-10px;width:24px;height:24px;margin-left:-12px;border:0;background:transparent;cursor:pointer;padding:0}
+#progress .tick::after{content:"";position:absolute;left:10px;top:8px;width:4px;height:8px;border-radius:2px;background:rgba(255,255,255,.55)}
+#progress .tick:hover::after{background:#fff;height:10px;top:7px}
+
+/* =====================================================================
+   8. HAREKET AZALTMA
+   ===================================================================== */
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{animation:none!important;transition-duration:.01ms!important}
+}
+</style>
+</head>
+<body>
+
+<div id="stage" class="frozen">
+  <div id="scenes"></div>
+  <svg id="strip" viewBox="0 0 1920 1080"><g id="stripG"></g></svg>
+  <div id="char"></div>
+  <div id="hud"></div>
+  <div id="brand">İÇ DENETİM SÜRECİ <span>2026</span></div>
+
+  <div id="finale"></div>
+  <div id="intro"><div class="intro-text" id="introText"></div><div class="intro-sub">İÇ DENETİM SÜRECİ</div></div>
+
+  <div id="controls" role="toolbar" aria-label="Oynatma kontrolleri">
+    <button id="bPrev" title="Önceki sahne (←)" aria-label="Önceki sahne"><svg viewBox="0 0 24 24"><path d="M6 5h2v14H6zM20 5v14L9 12z"/></svg></button>
+    <button id="bPlay" title="Oynat / Duraklat (Boşluk)" aria-label="Oynat veya duraklat"><svg viewBox="0 0 24 24"><path id="playIcon" d="M6 4h4v16H6zM14 4h4v16h-4z"/></svg></button>
+    <button id="bNext" title="Sonraki sahne (→)" aria-label="Sonraki sahne"><svg viewBox="0 0 24 24"><path d="M16 5h2v14h-2zM4 5v14l11-7z"/></svg></button>
+    <button id="bRestart" title="Yeniden başlat (R)" aria-label="Yeniden başlat"><svg viewBox="0 0 24 24"><path d="M12 5V2L7 6l5 4V7a5 5 0 1 1-5 5H5a7 7 0 1 0 7-7z"/></svg></button>
+    <button id="bFull" title="Tam ekran (F)" aria-label="Tam ekran"><svg viewBox="0 0 24 24"><path d="M4 4h6v2H6v4H4zM14 4h6v6h-2V6h-4zM4 14h2v4h4v2H4zM18 14h2v6h-6v-2h4z"/></svg></button>
+  </div>
+  <div id="progress"><div class="fill"></div></div>
+</div>
+
+<script>
+/* =====================================================================
+   A. SAHNE VERİSİ — metinleri, renkleri ve süreleri buradan değiştirin
+   ===================================================================== */
+const SECTIONS = [
+  { roman: 'I',   name: 'PLANLAMA',         color: '#5B9BFF' },  // mavi
+  { roman: 'II',  name: 'TEST VE İNCELEME', color: '#2DD4BF' },  // turkuaz
+  { roman: 'III', name: 'MUTABAKAT',        color: '#F5B342' },  // amber
+  { roman: 'IV',  name: 'RAPORLAMA',        color: '#E08AF0' }   // mor/pembe
+];
+
+// dur = sahne süresi (ms). art = çizim fonksiyonu, prop = karakterin elindeki nesne
+const SCENES = [
+  { sec:0, label:'Risk',     tag:'RİSK DEĞERLENDİRMESİ',      title:'Önce riskin haritası çıkarılır.',
+    desc:'Süreçler etki ve olasılığa göre puanlanır; kırmızı alanlar denetimin pusulası olur.', dur:5200, art:'risk',     prop:'folder' },
+  { sec:0, label:'Program',  tag:'KAPSAM VE DENETİM PROGRAMI', title:'Kapsam netleşir, program yazılır.',
+    desc:'Saha takvimi belirlenir, test adımları listelenir ve birimden bilgi/doküman talep edilir.', dur:5600, art:'program', prop:'clipboard' },
+  { sec:1, label:'Veri',     tag:'VERİ ANALİZİ',              title:'Veri konuşmaya başlar.',
+    desc:'Tüm popülasyon taranır; eşik dışı işlemler, tekrarlar ve anomaliler ayıklanır.', dur:5200, art:'data',       prop:'laptop' },
+  { sec:1, label:'Örneklem', tag:'ÖRNEKLEM VE KONTROL TESTİ', title:'Doğru dosya, doğru soru.',
+    desc:'Riskli işlemlerden örneklem seçilir; kontroller tasarım ve işleyiş yönünden test edilir.', dur:5200, art:'sample', prop:'magnifier' },
+  { sec:1, label:'Kanıt',    tag:'KANIT VE ÇALIŞMA KÂĞIDI',   title:'Her tespit kanıta dayanır.',
+    desc:'Belgeler çalışma kâğıdına bağlanır; yeterli ve güvenilir kanıt bulguya dönüşür.', dur:5200, art:'evidence',   prop:'folder' },
+  { sec:2, label:'Paylaşım', tag:'BULGULARIN PAYLAŞILMASI',   title:'Bulgular masaya konur.',
+    desc:'Tespitler birim yönetimiyle açıkça paylaşılır; kök nedenler birlikte tartışılır.', dur:5200, art:'meeting',    prop:'folder' },
+  { sec:2, label:'Uzlaşma',  tag:'UZLAŞMA VE AKSİYON PLANI',  title:'Sorumlu ve termin bellidir.',
+    desc:'Aksiyonlar, sorumlular ve tarihler üzerinde mutabık kalınır; imzalar atılır.', dur:5400, art:'agree',        prop:'sign' },
+  { sec:3, label:'Rapor',    tag:'RAPOR YAZIMI',              title:'Gece yarısı, son cümle.',
+    desc:'Bulgular önem sırasıyla yazılır; yönetici özeti büyük resmi tek sayfada anlatır.', dur:6000, art:'night',      prop:'report' },
+  { sec:3, label:'Sunum',    tag:'DENETİM KOMİTESİ SUNUMU',   title:'Güvence komiteye sunulur.',
+    desc:'Rapor Denetim Komitesi’ne sunulur; aksiyonların takibi başlar ve döngü yeniden döner.', dur:5600, art:'present', prop:'report' }
+];
+
+const INTRO = { text:'Bir denetim, aslında bir hikâyedir.', dur:3800 };
+const OUTRO = { text:'İyi bir denetim, kurumun kendine dürüstçe baktığı andır.', dur:9000 };
+const WALK_MS = 1400;           // karakterin bir noktadan diğerine yürüme süresi
+const CHAR_X  = 760;            // karakterin sahnedeki sabit x konumu (ayak merkezi)
+const GROUND  = 962;            // yer çizgisi (timeline) y konumu
+
+/* =====================================================================
+   B. YARDIMCILAR
+   ===================================================================== */
+const $ = s => document.querySelector(s);
+const REDUCE = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const N = SCENES.length;
+function rng(seed){ return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+  t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+const ease = t => t < .5 ? 4*t*t*t : 1 - Math.pow(-2*t + 2, 3) / 2;
+function words(str, start, step){
+  return str.split(' ').map((w,k) => `<span class="w" style="--d:${(start + k*step).toFixed(2)}s">${w}</span>`).join(' ');
+}
+
+/* =====================================================================
+   C. KARAKTER (düz vektör müfettiş) — yerel koordinat 200×400, ayak y≈394
+   ===================================================================== */
+const PROPS = {
+  none: '',
+  folder: `<g transform="rotate(-6 128 224)"><rect x="104" y="185" width="22" height="9" rx="2" fill="#D9A43E"/><rect x="104" y="190" width="52" height="66" rx="4" fill="#E2B04A"/><rect x="109" y="197" width="42" height="4" rx="2" fill="#F3D48A"/></g>`,
+  clipboard: `<g transform="rotate(-6 128 224)"><rect x="102" y="186" width="54" height="72" rx="5" fill="#8A6848"/><rect x="107" y="194" width="44" height="58" rx="2" fill="#F4F2EC"/><rect x="118" y="182" width="22" height="9" rx="3" fill="#B8C2D0"/><g fill="#9AA6BA"><rect x="112" y="204" width="32" height="3"/><rect x="112" y="213" width="26" height="3"/><rect x="112" y="222" width="30" height="3"/><rect x="112" y="231" width="22" height="3"/></g></g>`,
+  laptop: `<g transform="rotate(-8 128 224)"><rect x="98" y="194" width="66" height="50" rx="5" fill="#C5CDD8"/><rect x="98" y="240" width="66" height="5" rx="2" fill="#9EA8B6"/><circle cx="131" cy="218" r="6" fill="#E9EEF4"/></g>`,
+  magnifier: `<line x1="127" y1="236" x2="147" y2="204" stroke="#6B4B35" stroke-width="7" stroke-linecap="round"/><circle cx="157" cy="186" r="21" fill="rgba(200,240,255,.35)" stroke="#D8E2E8" stroke-width="5"/><path d="M147 178 a12 12 0 0 1 10 -6" stroke="#fff" stroke-width="3" fill="none" stroke-linecap="round"/>`,
+  sign: `<g transform="rotate(-6 128 224)"><rect x="102" y="190" width="52" height="66" rx="3" fill="#FBF7F0"/><rect x="108" y="200" width="36" height="3" fill="#C9C2B4"/><rect x="108" y="208" width="30" height="3" fill="#C9C2B4"/><rect x="108" y="216" width="34" height="3" fill="#C9C2B4"/><path d="M108 240 q6 -12 10 0 t10 0 t12 -5" stroke="#1F3A6E" stroke-width="2.2" fill="none"/><circle cx="145" cy="247" r="5.5" fill="var(--accent)"/></g>`,
+  report: `<g transform="rotate(-6 128 224)"><rect x="100" y="186" width="56" height="74" rx="3" fill="#FFFFFF"/><rect x="100" y="186" width="56" height="16" rx="3" fill="var(--accent)"/><g fill="#C8C8D4"><rect x="106" y="210" width="40" height="3"/><rect x="106" y="218" width="34" height="3"/><rect x="106" y="226" width="42" height="3"/></g><rect x="106" y="236" width="42" height="16" rx="2" fill="none" stroke="var(--accent)" stroke-width="2"/></g>`
+};
+
+function charSVG(prop = 'folder', o = {}){
+  const suit = o.suit || '#2C3E5C', suitD = o.suitD || '#213149', pants = o.pants || '#343C4A';
+  const skin = o.skin || '#EDC29F', hair = o.hair || '#3A2A20', shirt = '#F4F1EA';
+  const long = o.style === 'long';
+  return `
+  <ellipse cx="100" cy="396" rx="56" ry="7" fill="#000" opacity=".3"/>
+  <g class="c-body">
+    ${long ? `<path d="M62 92 Q56 150 70 178 L130 178 Q144 150 138 92 Z" fill="${hair}"/>` : ''}
+    <g class="c-leg c-leg-l"><rect x="79" y="250" width="20" height="138" rx="6" fill="${pants}"/><path d="M74 384 h24 q12 0 14 10 h-38 z" fill="#1A1E25"/></g>
+    <g class="c-leg c-leg-r"><rect x="101" y="250" width="20" height="138" rx="6" fill="${pants}"/><path d="M100 384 h24 q12 0 14 10 h-38 z" fill="#1A1E25"/></g>
+    <rect x="91" y="118" width="18" height="32" rx="6" fill="${skin}"/>
+    <path d="M62 176 Q64 150 88 146 L112 146 Q136 150 138 176 L140 262 Q100 272 60 262 Z" fill="${suit}"/>
+    <path d="M89 146 L100 190 L111 146 Z" fill="${shirt}"/>
+    <path d="M88 146 L99 198 L82 172 Z" fill="${suitD}"/><path d="M112 146 L101 198 L118 172 Z" fill="${suitD}"/>
+    <path d="M92 150 L80 194 M96 150 L84 194" stroke="#D5DCE8" stroke-width="2.2" fill="none"/>
+    <rect x="72" y="192" width="20" height="27" rx="3" fill="#F7F8FA"/><rect x="72" y="192" width="20" height="8" rx="2" fill="var(--accent,#5B9BFF)"/><circle cx="82" cy="208" r="3.3" fill="#9AA6BA"/>
+    <g class="c-arm-l"><rect x="50" y="156" width="21" height="106" rx="10" fill="${suit}"/><circle cx="60" cy="266" r="10" fill="${skin}"/></g>
+    <circle cx="67" cy="96" r="7" fill="${skin}"/><circle cx="133" cy="96" r="7" fill="${skin}"/>
+    <ellipse cx="100" cy="92" rx="33" ry="37" fill="${skin}"/>
+    ${long
+      ? `<path d="M67 96 Q60 48 100 50 Q140 50 133 96 Q128 72 112 66 Q94 78 70 72 Z" fill="${hair}"/>`
+      : `<path d="M67 88 Q64 50 100 50 Q137 50 134 86 Q126 70 104 70 Q86 72 72 66 Q69 76 67 88 Z" fill="${hair}"/>`}
+    <path d="M82 83 q6 -4 12 0 M106 83 q6 -4 12 0" stroke="${hair}" stroke-width="3" fill="none" stroke-linecap="round"/>
+    <g class="c-eyes"><circle cx="88" cy="95" r="3.4" fill="#2A211C"/><circle cx="112" cy="95" r="3.4" fill="#2A211C"/></g>
+    ${o.glasses === false ? '' : `<g stroke="#2B2B30" stroke-width="2.4" fill="rgba(255,255,255,.08)"><rect x="77" y="86" width="21" height="17" rx="5"/><rect x="102" y="86" width="21" height="17" rx="5"/><path d="M98 93 h4" fill="none"/></g>`}
+    <path d="M100 99 q-3 8 2 9" stroke="#C99673" stroke-width="2" fill="none" stroke-linecap="round"/>
+    <path d="M92 114 q8 6 16 0" stroke="#8A4B3A" stroke-width="2.6" fill="none" stroke-linecap="round"/>
+    <circle cx="80" cy="108" r="5" fill="#E79A86" opacity=".35"/><circle cx="120" cy="108" r="5" fill="#E79A86" opacity=".35"/>
+    ${PROPS[prop] || ''}
+    <path d="M134 160 L148 220 L128 236" stroke="${suit}" stroke-width="21" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    <circle cx="126" cy="236" r="10" fill="${skin}"/>
+  </g>`;
+}
+// Toplantıdaki birim yöneticisi
+const AUDITEE = () => `<g transform="translate(1560,440)" style="--accent:#9AA6BA">${charSVG('none',{suit:'#5E4B3C',suitD:'#4A3B2F',pants:'#3B332C',hair:'#1E1614',style:'long',glasses:false,skin:'#D9A47F'})}</g>`;
+
+/* =====================================================================
+   D. SAHNE İLLÜSTRASYONLARI (inline SVG, 1920×1080 koordinat)
+   ===================================================================== */
+const ART = {};
+
+/* --- 1. Risk değerlendirmesi: gündüz ofis, risk ısı haritası --- */
+ART.risk = () => {
+  const pal = ['#2E8B6A','#79B257','#E2BE45','#E8873A','#E04F4A'];
+  const hot = { '0,3':'Tahsis', '0,4':'Teminat', '1,4':'Limit' };
+  let cells = '';
+  for (let r = 0; r < 5; r++) for (let c = 0; c < 5; c++){
+    const s = (4 - r) + c, lv = s <= 1 ? 0 : s <= 3 ? 1 : s === 4 ? 2 : s <= 6 ? 3 : 4;
+    const x = 1080 + c*88, y = 250 + r*88, d = (500 + (r*5 + c)*45) + 'ms';
+    cells += `<rect class="hm-cell fb${lv === 4 ? ' hot' : ''}" style="--d:${d}" x="${x}" y="${y}" width="80" height="80" rx="9" fill="${pal[lv]}"/>`;
+    if (lv === 4) cells += `<text class="hm-t" style="--d:${d}" x="${x+40}" y="${y+46}" text-anchor="middle" font-size="16" font-weight="700" fill="#fff">${hot[r+','+c]}</text>`;
+  }
+  return `
+  <defs>
+    <linearGradient id="r-w" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3C5378"/><stop offset="1" stop-color="#26385A"/></linearGradient>
+    <linearGradient id="r-sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#CFE3F7"/><stop offset="1" stop-color="#90B9E6"/></linearGradient>
+    <linearGradient id="r-shaft" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".14"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>
+  </defs>
+  <rect width="1920" height="${GROUND}" fill="url(#r-w)"/>
+  <rect y="946" width="1920" height="16" fill="#22314D"/>
+  <rect y="${GROUND}" width="1920" height="118" fill="#1B2740"/>
+  <!-- pencere + ışık huzmesi -->
+  <rect x="1606" y="150" width="250" height="520" rx="6" fill="#1D2B45"/>
+  <rect x="1620" y="164" width="222" height="492" fill="url(#r-sky)"/>
+  <g fill="#fff" opacity=".85"><ellipse cx="1690" cy="262" rx="40" ry="13"/><ellipse cx="1716" cy="250" rx="28" ry="15"/><ellipse cx="1792" cy="382" rx="34" ry="10"/></g>
+  <path d="M1731 164V656M1620 410H1842" stroke="#1D2B45" stroke-width="10"/>
+  <polygon class="shaft" points="1620,656 1842,656 1640,962 1250,962" fill="url(#r-shaft)"/>
+  <!-- saksı bitkisi -->
+  <ellipse cx="200" cy="832" rx="18" ry="62" fill="#3E8C68"/>
+  <ellipse cx="168" cy="848" rx="14" ry="48" transform="rotate(-28 168 848)" fill="#4DA077"/>
+  <ellipse cx="234" cy="848" rx="14" ry="48" transform="rotate(28 234 848)" fill="#4DA077"/>
+  <path d="M150 890 h100 l-12 72 h-76 z" fill="#B86B45"/>
+  <!-- risk panosu -->
+  <rect x="1020" y="178" width="540" height="572" rx="14" fill="#1A2740" stroke="rgba(255,255,255,.08)"/>
+  <circle cx="1050" cy="198" r="5" fill="#8FA3C3"/><circle cx="1530" cy="198" r="5" fill="#8FA3C3"/>
+  <text x="1080" y="228" font-size="16" font-weight="700" letter-spacing="3" fill="#9FB3D1">RİSK HARİTASI · KREDİ SÜREÇLERİ</text>
+  ${cells}
+  <rect class="scan" x="1076" y="248" width="440" height="4" rx="2" fill="#5B9BFF"/>
+  <text transform="translate(1056 470) rotate(-90)" text-anchor="middle" font-size="14" font-weight="700" letter-spacing="3" fill="#7F93B3">OLASILIK ↑</text>
+  <text x="1296" y="716" text-anchor="middle" font-size="14" font-weight="700" letter-spacing="3" fill="#7F93B3">ETKİ →</text>
+  <!-- masa, laptop, kupa -->
+  <rect x="990" y="812" width="880" height="16" rx="4" fill="#4A5F84"/>
+  <rect x="1010" y="828" width="14" height="134" fill="#3A4C6C"/><rect x="1836" y="828" width="14" height="134" fill="#3A4C6C"/>
+  <g transform="translate(320,0)">
+  <rect x="1300" y="702" width="200" height="110" rx="8" fill="#16213A"/>
+  <rect x="1318" y="722" width="120" height="8" rx="4" fill="#5B9BFF" opacity=".85"/>
+  <rect x="1318" y="740" width="160" height="6" rx="3" fill="#8FA3C3" opacity=".4"/>
+  <rect x="1318" y="754" width="140" height="6" rx="3" fill="#8FA3C3" opacity=".4"/>
+  <g><rect x="1318" y="772" width="20" height="20" rx="3" fill="#E04F4A"/><rect x="1342" y="772" width="20" height="20" rx="3" fill="#E8873A"/><rect x="1366" y="772" width="20" height="20" rx="3" fill="#79B257"/></g>
+  <rect x="1280" y="806" width="240" height="8" rx="3" fill="#AEB9C8"/></g>
+  <rect x="1140" y="772" width="38" height="40" rx="6" fill="#EEF1F6"/>
+  <path d="M1178 782 q16 0 16 12 q0 12 -16 12" stroke="#EEF1F6" stroke-width="6" fill="none"/>
+  <path class="steam" d="M1152 762 q-8 -10 0 -20 q8 -10 0 -20" stroke="#fff" stroke-width="3" fill="none" stroke-linecap="round"/>
+  <path class="steam" style="--d:1.2s" d="M1166 762 q-8 -10 0 -20 q8 -10 0 -20" stroke="#fff" stroke-width="3" fill="none" stroke-linecap="round"/>`;
+};
+
+/* --- 2. Kapsam & program: takvim, kontrol listesi, bilgi talebi zarfı --- */
+function calPage(month, cls = '', d = ''){
+  let g = `<g class="${cls}" style="--d:${d}"><rect x="1000" y="210" width="280" height="320" rx="10" fill="#F2F4F8"/>
+    <rect x="1000" y="210" width="280" height="72" rx="10" fill="#5B9BFF"/><rect x="1000" y="262" width="280" height="20" fill="#5B9BFF"/>
+    <text x="1140" y="257" text-anchor="middle" font-size="26" font-weight="700" letter-spacing="2" fill="#fff">${month}</text>`;
+  for (let r = 0; r < 5; r++) for (let c = 0; c < 7; c++)
+    g += `<rect x="${1018 + c*36}" y="${300 + r*42}" width="28" height="30" rx="4" fill="#DCE2EC"/>`;
+  return g + '</g>';
+}
+ART.program = () => {
+  const items = ['Risk odaklı kapsam','Test adımları','Ekip ve saha takvimi','Açılış toplantısı','Bilgi/doküman talebi'];
+  let list = '';
+  items.forEach((t,i) => {
+    const y = 382 + i*80, d = (1.0 + i*.42).toFixed(2) + 's';
+    list += `<rect x="1395" y="${y-26}" width="34" height="34" rx="7" fill="none" stroke="#9AA6BA" stroke-width="3"/>
+      <path class="dr" pathLength="1" style="--d:${d};--t:.4s" d="M1402 ${y-9} l9 9 l17 -19" stroke="#3D7BE8" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+      <text x="1446" y="${y}" font-size="22" fill="#2C3440">${t}</text>`;
+  });
+  return `
+  <defs><linearGradient id="p-w" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3B4468"/><stop offset="1" stop-color="#262C48"/></linearGradient></defs>
+  <rect width="1920" height="${GROUND}" fill="url(#p-w)"/>
+  <rect y="946" width="1920" height="16" fill="#20263F"/>
+  <rect y="${GROUND}" width="1920" height="118" fill="#181D31"/>
+  <!-- alçak dolap -->
+  <rect x="100" y="800" width="380" height="162" rx="6" fill="#2E3659"/><rect x="100" y="792" width="380" height="12" rx="4" fill="#394270"/>
+  <rect x="280" y="820" width="4" height="120" fill="#262D4B"/><rect x="250" y="866" width="18" height="5" rx="2" fill="#8A93B8"/><rect x="296" y="866" width="18" height="5" rx="2" fill="#8A93B8"/>
+  <rect x="140" y="740" width="26" height="52" rx="3" fill="#5B9BFF" opacity=".7"/><rect x="170" y="748" width="22" height="44" rx="3" fill="#8A93B8"/><rect x="196" y="744" width="24" height="48" rx="3" fill="#6B7599"/>
+  <!-- takvim: son sayfa + çevrilen sayfalar -->
+  ${calPage('KASIM 2026')}
+  <rect class="cal-bar fbl" style="--d:1.6s" x="1052" y="342" width="174" height="30" rx="6" fill="#5B9BFF" opacity=".9"/>
+  <rect class="cal-bar fbl" style="--d:1.95s" x="1016" y="384" width="172" height="30" rx="6" fill="#5B9BFF" opacity=".9"/>
+  ${calPage('EKİM 2026', 'cal-page fbt', '1.05s')}
+  ${calPage('EYLÜL 2026', 'cal-page fbt', '.45s')}
+  <circle cx="1060" cy="210" r="8" fill="#9AA6BA"/><circle cx="1220" cy="210" r="8" fill="#9AA6BA"/>
+  <text x="1000" y="566" font-size="17" font-weight="600" letter-spacing="2" fill="#A9BCE0">SAHA ÇALIŞMASI · 2–13 KASIM</text>
+  <!-- kontrol listesi (denetim programı) -->
+  <rect x="1340" y="196" width="430" height="610" rx="16" fill="#7A5A3E"/>
+  <rect x="1365" y="236" width="380" height="548" rx="6" fill="#F4F2EC"/>
+  <rect x="1495" y="180" width="120" height="36" rx="8" fill="#B8C2D0"/>
+  <text x="1395" y="290" font-size="25" font-weight="800" fill="#1F2A3D">DENETİM PROGRAMI</text>
+  <text x="1395" y="320" font-size="17" fill="#7A8494">Kredi Süreçleri · 2026/11</text>
+  ${list}
+  <!-- masa + zarf -->
+  <rect x="940" y="830" width="940" height="16" rx="4" fill="#3E4A6E"/>
+  <rect x="960" y="846" width="14" height="116" fill="#313B5A"/><rect x="1846" y="846" width="14" height="116" fill="#313B5A"/>
+  <g class="env fb">
+    <rect x="1020" y="728" width="160" height="102" rx="6" fill="#F2E9D8"/>
+    <path d="M1020 732 L1100 786 L1180 732" stroke="#CDBFA6" stroke-width="3" fill="#E8DCC4"/>
+    <rect x="1148" y="740" width="22" height="26" rx="2" fill="#5B9BFF"/>
+  </g>
+  <g class="sent"><rect x="1010" y="780" width="310" height="40" rx="20" fill="rgba(91,155,255,.16)" stroke="#5B9BFF" stroke-width="2"/>
+    <text x="1165" y="806" text-anchor="middle" font-size="16" font-weight="700" letter-spacing="1.5" fill="#A9C8FF">✓ BİLGİ TALEBİ GÖNDERİLDİ</text></g>`;
+};
+
+/* --- 3. Veri analizi: koyu ekran, akan tablo, anomali vurgusu --- */
+ART.data = () => {
+  const R = rng(7), rowsN = 14, anom = [2,6,9,12], rows = [];
+  for (let k = 0; k < rowsN; k++){
+    const a = anom.includes(k);
+    const amt = Math.round(a ? 480000 + R()*470000 : 2000 + R()*58000);
+    rows.push({ a,
+      cust: `${1000 + Math.floor(R()*9000)}•••${10 + Math.floor(R()*89)}`,
+      amt: amt.toLocaleString('tr-TR') + ',00',
+      date: `${String(1 + Math.floor(R()*28)).padStart(2,'0')}.${String(1 + Math.floor(R()*9)).padStart(2,'0')}.2026`,
+      br: '0' + (100 + Math.floor(R()*899)),
+      sc: (a ? .9 + R()*.09 : .05 + R()*.3).toFixed(2) });
+  }
+  let g = '';
+  for (let k = 0; k < rowsN*2; k++){          // iki kopya → kesintisiz döngü
+    const r = rows[k % rowsN], y = 290 + k*44, f = r.a ? '#FF9A9A' : '#86AEB6';
+    if (r.a) g += `<rect x="968" y="${y-29}" width="874" height="40" rx="6" fill="rgba(45,212,191,.13)" stroke="rgba(45,212,191,.55)" stroke-width="1.5"/>
+      <circle class="blip fb" cx="1822" cy="${y-9}" r="6" fill="#FF6B6B"/>`;
+    g += `<text x="990" y="${y}" fill="#86AEB6">${r.cust}</text><text x="1180" y="${y}" fill="${f}">${r.amt}</text>
+      <text x="1420" y="${y}" fill="#86AEB6">${r.date}</text><text x="1580" y="${y}" fill="#86AEB6">${r.br}</text>
+      <text x="1720" y="${y}" fill="${f}" font-weight="${r.a ? 700 : 400}">${r.sc}</text>`;
+  }
+  return `
+  <defs>
+    <radialGradient id="d-glow" cx="1400" cy="470" r="760" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#2DD4BF" stop-opacity=".16"/><stop offset="1" stop-color="#2DD4BF" stop-opacity="0"/></radialGradient>
+    <pattern id="d-grid" width="48" height="48" patternUnits="userSpaceOnUse"><path d="M48 0H0V48" fill="none" stroke="rgba(45,212,191,.06)"/></pattern>
+    <clipPath id="d-clip"><rect x="962" y="256" width="886" height="516"/></clipPath>
+  </defs>
+  <rect width="1920" height="1080" fill="#050E13"/>
+  <rect width="1920" height="${GROUND}" fill="url(#d-grid)"/>
+  <rect width="1920" height="1080" fill="url(#d-glow)"/>
+  <rect y="${GROUND}" width="1920" height="118" fill="#040A0E"/>
+  <!-- monitör -->
+  <rect x="960" y="140" width="890" height="640" rx="18" fill="#0A1B22" stroke="#1F4B55" stroke-width="3"/>
+  <path d="M962 196 V158 a16 16 0 0 1 16 -16 H1832 a16 16 0 0 1 16 16 V196 Z" fill="#0E2830"/>
+  <text x="990" y="176" font-size="17" font-weight="700" letter-spacing="2" fill="#7FD9CC">VERİ ANALİZİ · KREDİ İŞLEMLERİ (N = 1.240)</text>
+  <g class="pulse"><rect x="1650" y="155" width="176" height="28" rx="14" fill="rgba(255,107,107,.15)" stroke="#FF6B6B" stroke-width="1.5"/>
+    <text x="1738" y="175" text-anchor="middle" font-size="14" font-weight="800" letter-spacing="2" fill="#FF8A8A">ANOMALİ · 4</text></g>
+  <g font-size="15" font-weight="700" letter-spacing="2" fill="#4FA9A0">
+    <text x="990" y="232">MÜŞTERİ</text><text x="1180" y="232">TUTAR (₺)</text><text x="1420" y="232">TARİH</text><text x="1580" y="232">ŞUBE</text><text x="1720" y="232">SKOR</text></g>
+  <line x1="975" y1="248" x2="1835" y2="248" stroke="#1F4B55" stroke-width="2"/>
+  <g clip-path="url(#d-clip)"><g class="rows mono" font-size="20">${g}</g></g>
+  <!-- ayak ve masa -->
+  <rect x="1385" y="780" width="40" height="70" fill="#13262D"/>
+  <rect x="930" y="850" width="950" height="14" rx="4" fill="#0F2229"/>
+  <rect x="950" y="864" width="14" height="98" fill="#0B1A20"/><rect x="1846" y="864" width="14" height="98" fill="#0B1A20"/>
+  <rect x="1250" y="836" width="300" height="12" rx="4" fill="#163038"/>`;
+};
+
+/* --- 4. Örneklem: arşiv rafları, dosya kutusu, gezen büyüteç --- */
+ART.sample = () => {
+  const R = rng(21), cols = ['#3A626B','#2F525A','#4B7064','#5B6F7B','#3F5B67'];
+  let shelves = '';
+  [250, 370, 490].forEach(by => {
+    let x = 1000;
+    while (true){
+      const w = 26 + Math.floor(R()*18), h = 80 + Math.floor(R()*24);
+      if (x + w > 1815) break;
+      shelves += `<rect x="${x}" y="${by-h}" width="${w}" height="${h}" rx="3" fill="${cols[Math.floor(R()*5)]}"/><rect x="${x+6}" y="${by-h+14}" width="${w-12}" height="14" rx="2" fill="#CFE0DD" opacity=".3"/>`;
+      x += w + 4;
+    }
+    shelves += `<rect x="985" y="${by}" width="850" height="10" fill="#34525A"/>`;
+  });
+  const sel = { 1:1.2, 4:2.2, 7:3.2 };
+  let folders = '';
+  for (let k = 0; k < 9; k++){
+    const x = 1010 + k*90, c = ['#E7C46A','#D9B45A','#EBCB78'][k % 3];
+    const f = `<rect x="${x+8}" y="646" width="30" height="18" rx="4" fill="${c}"/><rect x="${x}" y="660" width="80" height="240" rx="6" fill="${c}"/><rect x="${x+14}" y="690" width="52" height="10" rx="2" fill="#fff" opacity=".7"/>`;
+    if (sel[k] !== undefined){
+      const n = Object.keys(sel).indexOf(String(k)) + 1;
+      folders += `<g class="sel" style="--d:${sel[k]}s">${f}
+        <rect class="outline" x="${x-4}" y="642" width="88" height="262" rx="9" fill="none" stroke="#2DD4BF" stroke-width="4"/>
+        <g class="tagp"><rect x="${x-8}" y="600" width="96" height="30" rx="15" fill="#2DD4BF"/><text x="${x+40}" y="621" text-anchor="middle" font-size="14" font-weight="800" letter-spacing=".5" fill="#06201D">ÖRNEK ${n}</text></g></g>`;
+    } else folders += f;
+  }
+  return `
+  <defs><linearGradient id="s-w" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1F3338"/><stop offset="1" stop-color="#142226"/></linearGradient></defs>
+  <rect width="1920" height="${GROUND}" fill="url(#s-w)"/>
+  <rect y="${GROUND}" width="1920" height="118" fill="#0F181B"/>
+  <rect x="975" y="130" width="870" height="380" rx="8" fill="#1A2D32"/>
+  ${shelves}
+  <!-- tavan lambası -->
+  <g transform="translate(360,0)"><line x1="420" y1="0" x2="420" y2="120" stroke="#0E191C" stroke-width="3"/>
+  <path d="M380 120 h80 l24 40 h-128 z" fill="#27403F"/><ellipse cx="420" cy="162" rx="60" ry="7" fill="#BFF3EA" opacity=".35"/></g>
+  ${folders}
+  <!-- dosya kutusu -->
+  <rect x="990" y="790" width="840" height="120" rx="10" fill="#2F4F56"/>
+  <rect x="990" y="790" width="840" height="12" rx="6" fill="#3E646C"/>
+  <text x="1410" y="862" text-anchor="middle" font-size="20" font-weight="700" letter-spacing="2" fill="#CFE7E3">KREDİ DOSYALARI · ÖRNEKLEM 25 / 1.240</text>
+  <rect x="1010" y="910" width="20" height="52" fill="#243E44"/><rect x="1790" y="910" width="20" height="52" fill="#243E44"/>
+  <!-- büyüteç -->
+  <g class="mag">
+    <line x1="1102" y1="742" x2="1150" y2="790" stroke="#6B4B35" stroke-width="18" stroke-linecap="round"/>
+    <circle cx="1060" cy="700" r="58" fill="rgba(200,255,248,.16)" stroke="#DCE8EA" stroke-width="10"/>
+    <path d="M1030 676 a36 36 0 0 1 28 -16" stroke="#fff" stroke-width="5" fill="none" stroke-linecap="round" opacity=".8"/>
+  </g>`;
+};
+
+/* --- 5. Kanıt: çalışma kâğıdı, iliştirilen belgeler, düşen BULGU etiketi --- */
+ART.evidence = () => {
+  const R = rng(5);
+  let lines = '';
+  for (let y = 306; y <= 660; y += 30) lines += `<rect x="1100" y="${y}" width="${200 + Math.floor(R()*170)}" height="10" rx="5" fill="#C9D3CF"/>`;
+  const cards = [['Kredi sözleşmesi','12 sayfa · imzalı',336],['Ekspertiz raporu','Değerleme: 2023',456],['Sistem log kaydı','1.240 kayıt',576]];
+  let cg = '', conn = '';
+  cards.forEach(([t,s,ry],i) => {
+    const y = 240 + i*160, d = (.7 + i*.7).toFixed(1) + 's';
+    conn += `<g class="conn" style="--d:${d}"><path d="M1575 ${y+59} L1492 ${ry+5}" stroke="#2DD4BF" stroke-width="2.5" stroke-dasharray="6 6" fill="none"/><circle cx="1492" cy="${ry+5}" r="7" fill="#2DD4BF"/></g>`;
+    cg += `<g class="card fb" style="--d:${d}">
+      <rect x="1575" y="${y}" width="245" height="118" rx="10" fill="#fff"/>
+      <path d="M1575 ${y+28} V${y+10} a10 10 0 0 1 10 -10 H1810 a10 10 0 0 1 10 10 V${y+28} Z" fill="#2DD4BF"/>
+      <text x="1591" y="${y+20}" font-size="13" font-weight="800" letter-spacing="2" fill="#053B35">KANIT E-0${i+1}</text>
+      <text x="1591" y="${y+64}" font-size="20" font-weight="700" fill="#1E2B2E">${t}</text>
+      <text x="1591" y="${y+92}" font-size="15" fill="#7A8686">${s}</text>
+      <path d="M1778 ${y-12} v34 a8 8 0 0 0 16 0 v-28 a5 5 0 0 0 -10 0 v24" stroke="#9AA6A8" stroke-width="3" fill="none"/></g>`;
+  });
+  return `
+  <defs><linearGradient id="e-w" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1C2B2E"/><stop offset="1" stop-color="#121D20"/></linearGradient></defs>
+  <rect width="1920" height="${GROUND}" fill="url(#e-w)"/>
+  <rect y="${GROUND}" width="1920" height="118" fill="#0D1618"/>
+  <rect x="1040" y="130" width="810" height="760" rx="16" fill="#223437"/>
+  <line x1="1110" y1="890" x2="1090" y2="962" stroke="#1A2729" stroke-width="12"/><line x1="1780" y1="890" x2="1800" y2="962" stroke="#1A2729" stroke-width="12"/>
+  <g class="paper5">
+    <rect x="1075" y="170" width="440" height="680" rx="6" fill="#EEF1EC"/>
+    <path d="M1075 234 V176 a6 6 0 0 1 6 -6 H1509 a6 6 0 0 1 6 6 V234 Z" fill="#D7E3DF"/>
+    <text x="1100" y="212" font-size="22" font-weight="800" fill="#1E2B2E">ÇALIŞMA KÂĞIDI · ÇK-05</text>
+    <text x="1100" y="270" font-size="17" fill="#6C7A7A">Kredi Tahsis · Teminat Testi</text>
+    ${lines}
+  </g>
+  ${conn}${cg}
+  <g class="stamp fb">
+    <rect x="1150" y="700" width="290" height="96" rx="10" fill="rgba(255,107,107,.1)" stroke="#FF6B6B" stroke-width="5"/>
+    <text x="1295" y="752" text-anchor="middle" font-size="36" font-weight="900" letter-spacing="4" fill="#FF6B6B">BULGU #3</text>
+    <text x="1295" y="782" text-anchor="middle" font-size="16" font-weight="700" letter-spacing="2" fill="#E0575A">ÖNEM: YÜKSEK</text>
+  </g>`;
+};
+
+/* --- 6 & 7 ortak: toplantı odası --- */
+function meetingRoom(sunset){
+  const id = sunset ? 'm2' : 'm1', R = rng(sunset ? 9 : 3);
+  const sky = sunset ? ['#F4B26A','#A95F78'] : ['#9EC1E6','#E8CFA8'];
+  const wall = sunset ? ['#4B2F24','#2B1B15'] : ['#3E3028','#2A201A'];
+  let city = '';
+  for (let x = 964; x < 1856;){
+    const w = 50 + Math.floor(R()*70), h = 90 + Math.floor(R()*200);
+    city += `<rect x="${x}" y="${556-h}" width="${Math.min(w, 1856-x)}" height="${h}" fill="${sunset ? '#3A2330' : '#5E6F88'}" opacity="${sunset ? .85 : .5}"/>`;
+    x += w + 6;
+  }
+  return `
+  <defs>
+    <linearGradient id="${id}-w" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${wall[0]}"/><stop offset="1" stop-color="${wall[1]}"/></linearGradient>
+    <linearGradient id="${id}-s" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${sky[0]}"/><stop offset="1" stop-color="${sky[1]}"/></linearGradient>
+  </defs>
+  <rect width="1920" height="${GROUND}" fill="url(#${id}-w)"/>
+  <rect y="${GROUND}" width="1920" height="118" fill="#1E1612"/>
+  <rect x="950" y="120" width="920" height="450" rx="6" fill="#1E1712"/>
+  <rect x="964" y="134" width="892" height="422" fill="url(#${id}-s)"/>
+  ${sunset ? '<circle cx="1790" cy="430" r="60" fill="#FFD89A" opacity=".9"/>' : ''}
+  ${city}
+  <path d="M1260 134V556M1560 134V556" stroke="#1E1712" stroke-width="10"/>
+  <!-- saksı bitkisi (sol) -->
+  <ellipse cx="160" cy="820" rx="20" ry="70" fill="#4E7A4A"/><ellipse cx="128" cy="842" rx="14" ry="50" transform="rotate(-26 128 842)" fill="#5E8C55"/>
+  <ellipse cx="192" cy="842" rx="14" ry="50" transform="rotate(26 192 842)" fill="#5E8C55"/><path d="M110 890 h100 l-12 72 h-76 z" fill="#8E5A3C"/>
+  ${AUDITEE()}
+  <!-- masa ve üzerindekiler -->
+  <rect x="1120" y="712" width="170" height="78" rx="6" fill="#A8B0BA"/><circle cx="1205" cy="751" r="9" fill="#C9CFD6"/>
+  <rect x="910" y="790" width="970" height="24" rx="6" fill="#6E4F38"/>
+  <rect x="930" y="814" width="930" height="44" fill="#563C2A"/>
+  <rect x="950" y="858" width="18" height="104" fill="#46311F"/><rect x="1822" y="858" width="18" height="104" fill="#46311F"/>
+  <rect x="1330" y="774" width="130" height="8" rx="2" fill="#F1EDE4"/><rect x="1336" y="782" width="130" height="8" rx="2" fill="#E3DCCD"/>
+  <rect x="1760" y="758" width="30" height="32" rx="5" fill="#EDE6DA"/>`;
+}
+
+/* --- 6. Bulguların paylaşılması: konuşma balonları, ses dalgası --- */
+ART.meeting = () => {
+  const items = ['Teminat değerlemeleri güncel değil','Limit aşımlarında onay izi yok','Log kayıtları gözden geçirilmiyor'];
+  let it = '';
+  items.forEach((t,i) => {
+    const y = 356 + i*50, d = (1.2 + i*.5).toFixed(1) + 's';
+    it += `<g class="item" style="--d:${d}"><circle cx="942" cy="${y-7}" r="13" fill="#F5B342"/><text x="942" y="${y-2}" text-anchor="middle" font-size="15" font-weight="800" fill="#3A2600">${i+1}</text>
+      <text x="966" y="${y}" font-size="22" fill="#2E2A26">${t}</text></g>`;
+  });
+  let wave = '';
+  const hs = [18,34,50,28,56,40,22,46,30];
+  hs.forEach((h,i) => wave += `<rect class="wave fb" style="--d:${(i*.07).toFixed(2)}s" x="${1600 + i*24}" y="${305 - h/2}" width="10" height="${h}" rx="5" fill="#F5B342"/>`);
+  return meetingRoom(false) + `
+  <line x1="1300" y1="0" x2="1300" y2="104" stroke="#1A1410" stroke-width="3"/>
+  <path d="M1262 104 h76 l20 40 h-116 z" fill="#2A211B"/><ellipse cx="1300" cy="146" rx="56" ry="7" fill="#FFD9A0" opacity=".55"/>
+  <g class="bubble" style="--d:.6s;transform-box:view-box;transform-origin:880px 560px">
+    <path d="M922 250 H1408 a22 22 0 0 1 22 22 V478 a22 22 0 0 1 -22 22 H990 L880 562 L940 500 H922 a22 22 0 0 1 -22 -22 V272 a22 22 0 0 1 22 -22 Z" fill="#FBF7F0"/>
+    <text x="930" y="298" font-size="16" font-weight="800" letter-spacing="3" fill="#C98510">BULGULAR</text>
+    ${it}
+  </g>
+  <g class="bubble" style="--d:2.9s;transform-box:view-box;transform-origin:1650px 470px">
+    <path d="M1582 240 H1838 a22 22 0 0 1 22 22 V348 a22 22 0 0 1 -22 22 H1680 L1650 470 L1640 370 H1582 a22 22 0 0 1 -22 -22 V262 a22 22 0 0 1 22 -22 Z" fill="#FBF7F0"/>
+    ${wave}
+  </g>`;
+};
+
+/* --- 7. Uzlaşma: aksiyon planı, termin, imza, el sıkışma --- */
+ART.agree = () => meetingRoom(true) + `
+  <g class="popin fb" style="--d:.4s">
+    <rect x="950" y="150" width="560" height="540" rx="16" fill="#FBF7F0"/>
+    <text x="985" y="202" font-size="16" font-weight="800" letter-spacing="3" fill="#C98510">AKSİYON PLANI</text>
+    <text x="985" y="240" font-size="23" font-weight="800" fill="#2E2A26">Bulgu #3 · Teminat değerlemesi</text>
+    <g font-size="13" font-weight="800" letter-spacing="2" fill="#9A9185"><text x="985" y="292">AKSİYON</text><text x="1225" y="292">SORUMLU</text><text x="1355" y="292">TERMİN</text></g>
+    <line x1="985" y1="306" x2="1478" y2="306" stroke="#E2DACB" stroke-width="2"/>
+    <g font-size="19" fill="#2E2A26">
+      <text x="985" y="350">Değerleme yenilenecek</text><text x="1225" y="350">Tahsis</text><text x="1355" y="350" font-weight="700">31.12.2026</text>
+      <text x="985" y="404">Onay akışı sisteme</text><text x="1225" y="404">BT / Ops.</text><text x="1355" y="404" font-weight="700">31.03.2027</text></g>
+    <ellipse class="dr" pathLength="1" style="--d:1.3s;--t:.7s" cx="1408" cy="343" rx="66" ry="24" stroke="#F5B342" stroke-width="3" fill="none"/>
+    <g class="popin fb" style="--d:3.5s"><rect x="985" y="440" width="260" height="42" rx="21" fill="rgba(245,179,66,.18)" stroke="#F5B342" stroke-width="2"/>
+      <text x="1115" y="467" text-anchor="middle" font-size="16" font-weight="800" letter-spacing="2" fill="#B87708">✓ MUTABIK KALINDI</text></g>
+    <path class="dr" pathLength="1" style="--d:2.0s;--t:.8s" d="M1000 598 c14 -36 26 -30 22 -6 s-10 26 8 6 s20 -30 32 -10 s18 14 38 -8 s26 6 50 0" stroke="#1F3A6E" stroke-width="3" fill="none" stroke-linecap="round"/>
+    <path class="dr" pathLength="1" style="--d:2.7s;--t:.8s" d="M1300 600 c10 -30 30 -40 24 -8 c-4 18 12 10 22 -8 c8 -14 16 0 20 8 c6 10 20 -18 40 -14 c14 2 30 6 48 -4" stroke="#1F3A6E" stroke-width="3" fill="none" stroke-linecap="round"/>
+    <line x1="990" y1="614" x2="1200" y2="614" stroke="#BEB5A5" stroke-width="2"/><line x1="1290" y1="614" x2="1480" y2="614" stroke="#BEB5A5" stroke-width="2"/>
+    <g font-size="15" fill="#8A8176"><text x="990" y="640">Denetim</text><text x="1290" y="640">Birim Yönetimi</text></g>
+  </g>
+  <!-- el sıkışma rozeti -->
+  <circle class="ring fb" cx="1690" cy="300" r="82" fill="none" stroke="#F5B342" stroke-width="2"/>
+  <circle cx="1690" cy="300" r="82" fill="rgba(245,179,66,.14)" stroke="#F5B342" stroke-width="3"/>
+  <g class="shake">
+    <g class="slideL"><rect x="1604" y="288" width="48" height="28" rx="6" fill="#2C3E5C"/></g>
+    <g class="slideR"><rect x="1728" y="288" width="48" height="28" rx="6" fill="#5E4B3C"/></g>
+    <g class="fadein" style="--d:1.2s"><rect x="1646" y="282" width="88" height="40" rx="18" fill="#E5B48F"/>
+      <path d="M1668 290 v24 M1682 288 v28 M1696 288 v28 M1710 290 v24" stroke="#C8906A" stroke-width="2.5" stroke-linecap="round"/></g>
+  </g>`;
+
+/* --- 8. Rapor yazımı: gece, masa lambası, daktilo, yönetici özeti --- */
+ART.night = () => {
+  const R = rng(11);
+  let stars = '';
+  for (let i = 0; i < 16; i++) stars += `<circle class="twinkle" style="--d:${(R()*2).toFixed(2)}s" cx="${1584 + R()*240}" cy="${154 + R()*330}" r="${(1 + R()*1.8).toFixed(1)}" fill="#fff"/>`;
+  const L = ['1. Teminat değerlemeleri süresinde','    yenilenmemektedir. (Yüksek)','2. Limit aşımlarında onay izi','    bulunamamıştır. (Yüksek)','3. Log incelemeleri düzenli','    yapılmamaktadır. (Orta)'];
+  let typed = '';
+  L.forEach((t,i) => {
+    const y = 284 + i*34;
+    typed += `<text x="1030" y="${y}" font-size="19" fill="#3A3F4A" xml:space="preserve">${t}</text>
+      <rect class="typecover" style="--d:${(.6 + i*.55).toFixed(2)}s" x="1026" y="${y-22}" width="430" height="30" fill="#F4EFE3"/>`;
+  });
+  return `
+  <defs>
+    <linearGradient id="n-w" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0F1328"/><stop offset="1" stop-color="#070914"/></linearGradient>
+    <linearGradient id="n-cone" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FFD9A0" stop-opacity=".34"/><stop offset="1" stop-color="#FFD9A0" stop-opacity="0"/></linearGradient>
+    <radialGradient id="n-moon"><stop offset="0" stop-color="#F5EFD6" stop-opacity=".35"/><stop offset="1" stop-color="#F5EFD6" stop-opacity="0"/></radialGradient>
+    <clipPath id="n-clip"><rect x="1000" y="140" width="460" height="520" rx="6"/></clipPath>
+  </defs>
+  <rect width="1920" height="${GROUND}" fill="url(#n-w)"/>
+  <rect y="${GROUND}" width="1920" height="118" fill="#06070D"/>
+  <!-- pencere -->
+  <rect x="1560" y="130" width="290" height="380" rx="6" fill="#1B2040"/>
+  <rect x="1574" y="144" width="262" height="352" fill="#0F1735"/>
+  <circle cx="1770" cy="214" r="80" fill="url(#n-moon)"/><circle cx="1770" cy="214" r="32" fill="#F5EFD6"/>
+  ${stars}
+  <path d="M1705 144V496M1574 320H1836" stroke="#1B2040" stroke-width="8"/>
+  <!-- kitaplık silüeti -->
+  <rect x="110" y="690" width="340" height="272" fill="#0E1226"/>
+  <g fill="#161B36"><rect x="130" y="710" width="30" height="100"/><rect x="164" y="720" width="24" height="90"/><rect x="192" y="706" width="36" height="104"/><rect x="130" y="840" width="40" height="100"/><rect x="176" y="850" width="26" height="90"/></g>
+  <!-- masa, laptop, kupa -->
+  <rect x="930" y="780" width="940" height="16" rx="4" fill="#2B2543"/>
+  <rect x="950" y="796" width="14" height="166" fill="#211C35"/><rect x="1836" y="796" width="14" height="166" fill="#211C35"/>
+  <rect x="1180" y="684" width="200" height="96" rx="8" fill="#1A2140"/>
+  <rect x="1196" y="700" width="120" height="6" rx="3" fill="#E08AF0" opacity=".8"/><rect x="1196" y="714" width="160" height="5" rx="2" fill="#8C93B8" opacity=".5"/><rect x="1196" y="726" width="140" height="5" rx="2" fill="#8C93B8" opacity=".5"/>
+  <rect x="1160" y="776" width="240" height="8" rx="3" fill="#9AA2B8"/>
+  <rect x="1440" y="742" width="34" height="38" rx="6" fill="#D8D2E8"/>
+  <!-- masa lambası -->
+  <g class="flicker">
+    <polygon points="1532,600 1648,600 1760,780 1150,780" fill="url(#n-cone)"/>
+    <ellipse cx="1470" cy="780" rx="280" ry="14" fill="#FFD9A0" opacity=".22"/>
+    <circle cx="1590" cy="600" r="28" fill="#FFE7B8" opacity=".55"/>
+  </g>
+  <ellipse cx="1760" cy="776" rx="52" ry="10" fill="#3A3354"/>
+  <path d="M1760 776 L1712 606 L1600 560" stroke="#4A4266" stroke-width="10" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M1556 548 h72 l24 52 h-120 z" fill="#6B5B9A"/>
+  <!-- rapor sayfası -->
+  <rect x="1014" y="154" width="460" height="520" rx="6" fill="#000" opacity=".35"/>
+  <g clip-path="url(#n-clip)">
+    <rect x="1000" y="140" width="460" height="520" fill="#F4EFE3"/>
+    <text x="1030" y="196" font-size="26" font-weight="800" fill="#1E1B2A">DENETİM RAPORU</text>
+    <text x="1030" y="226" font-size="17" fill="#8A8494">Kredi Süreçleri · 2026</text>
+    <line x1="1030" y1="244" x2="1430" y2="244" stroke="#D9D1BF" stroke-width="2"/>
+    ${typed}
+    <g class="summary fb">
+      <rect x="1030" y="494" width="400" height="136" rx="10" fill="rgba(224,138,240,.12)" stroke="#E08AF0" stroke-width="3"/>
+      <text x="1052" y="528" font-size="15" font-weight="800" letter-spacing="3" fill="#A94BBE">YÖNETİCİ ÖZETİ</text>
+      <text x="1052" y="566" font-size="20" font-weight="700" fill="#2A2233">3 bulgu · 2 yüksek · 1 orta</text>
+      <text x="1052" y="602" font-size="19" fill="#4A4254">Genel görüş: İyileştirme gerekli</text>
+    </g>
+  </g>`;
+};
+
+/* --- 9. Sunum: spot ışığı, Denetim Komitesi, ekranda rapor, onay --- */
+ART.present = () => {
+  let sil = '';
+  [1180,1325,1470,1615,1760].forEach((x,i) => {
+    sil += `<g class="${i % 2 ? 'nod fb' : ''}" style="--d:${i*.6}s"><circle cx="${x}" cy="772" r="32" fill="#1B1427" stroke="rgba(224,138,240,.38)" stroke-width="2"/>
+      <path d="M${x-66} 852 Q${x-60} 806 ${x} 804 Q${x+60} 806 ${x+66} 852 Z" fill="#1B1427" stroke="rgba(224,138,240,.38)" stroke-width="2"/></g>`;
+  });
+  const bars = [120,170,90,150];
+  let b = '';
+  bars.forEach((h,i) => b += `<rect class="bar fbb" style="--d:${(.9 + i*.18).toFixed(2)}s" x="${1090 + i*70}" y="${522-h}" width="44" height="${h}" rx="4" fill="#E08AF0" opacity="${.55 + i*.12}"/>
+    <text x="${1112 + i*70}" y="542" text-anchor="middle" font-size="13" fill="#8A7A96">Ç${i+1}</text>`);
+  return `
+  <defs>
+    <linearGradient id="t-w" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0D0916"/><stop offset="1" stop-color="#060409"/></linearGradient>
+    <linearGradient id="t-spot" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".2"/><stop offset="1" stop-color="#fff" stop-opacity=".03"/></linearGradient>
+    <linearGradient id="t-sweep" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#F3C8FF" stop-opacity=".16"/><stop offset="1" stop-color="#F3C8FF" stop-opacity="0"/></linearGradient>
+  </defs>
+  <rect width="1920" height="${GROUND}" fill="url(#t-w)"/>
+  <rect y="${GROUND}" width="1920" height="118" fill="#08060D"/>
+  <!-- ekran -->
+  <rect x="1030" y="130" width="760" height="440" rx="12" fill="#150F22" stroke="#2C2240" stroke-width="3"/>
+  <rect x="1050" y="150" width="720" height="400" fill="#F6F1FA"/>
+  <rect x="1050" y="150" width="720" height="44" fill="#E08AF0"/>
+  <text x="1074" y="179" font-size="16" font-weight="800" letter-spacing="3" fill="#2A0F33">DENETİM KOMİTESİ · 2026/4</text>
+  <text x="1074" y="250" font-size="36" font-weight="800" fill="#1E1426">İç Denetim Raporu</text>
+  <text x="1074" y="284" font-size="19" fill="#7A6A86">Kredi Süreçleri · Yönetici Özeti</text>
+  ${b}
+  <g class="fadein" style="--d:1.8s">
+    <text x="1420" y="372" font-size="56" font-weight="800" fill="#1E1426">3</text><text x="1462" y="370" font-size="20" fill="#5A4A66">bulgu · 2 aksiyon</text>
+    <text x="1420" y="440" font-size="44" font-weight="800" fill="#1E1426">%100</text><text x="1560" y="438" font-size="20" fill="#5A4A66">mutabakat</text>
+  </g>
+  <g class="popin fb" style="--d:3.3s"><circle cx="1690" cy="490" r="54" fill="#E08AF0"/></g>
+  <path class="dr" pathLength="1" style="--d:3.6s;--t:.45s" d="M1664 490 l18 18 l32 -36" stroke="#fff" stroke-width="11" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <!-- ışıklar -->
+  <polygon class="sweep" points="1370,-40 1430,-40 1640,962 1160,962" fill="url(#t-sweep)"/>
+  <polygon points="726,0 794,0 930,962 590,962" fill="url(#t-spot)"/>
+  <ellipse cx="760" cy="962" rx="190" ry="22" fill="#fff" opacity=".1"/>
+  <!-- komite -->
+  ${sil}
+  <rect x="1090" y="846" width="800" height="10" fill="#2A1F3A"/>
+  <rect x="1090" y="856" width="800" height="106" fill="#140E1E"/>
+  <text x="1490" y="918" text-anchor="middle" font-size="16" font-weight="700" letter-spacing="4" fill="#5E4A72">DENETİM KOMİTESİ</text>`;
+};
+
+/* =====================================================================
+   E. DOM KURULUMU — sahneler, timeline şeridi, kapanış, ilerleme çubuğu
+   ===================================================================== */
+const stage = $('#stage'), hud = $('#hud'), charEl = $('#char'), stripG = $('#stripG');
+const introEl = $('#intro'), finEl = $('#finale'), fillEl = $('#progress .fill');
+
+$('#scenes').innerHTML = SCENES.map(s => `<svg class="scene" viewBox="0 0 1920 1080">${ART[s.art]()}</svg>`).join('');
+const sceneEls = [...document.querySelectorAll('.scene')];
+
+// Timeline noktalarının şerit üzerindeki x konumları (bölüm geçişlerinde ekstra boşluk)
+const SX = SCENES.map((s,i) => i*480 + s.sec*150);
+const START = -520;
+(function buildStrip(){
+  let h = `<defs><filter id="glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>
+    <line x1="-3000" y1="${GROUND}" x2="${SX[N-1] + 3000}" y2="${GROUND}" stroke="rgba(255,255,255,.3)" stroke-width="2"/>`;
+  for (let x = -3000; x < SX[N-1] + 3000; x += 60) h += `<line x1="${x}" y1="${GROUND}" x2="${x}" y2="${GROUND+6}" stroke="rgba(255,255,255,.12)"/>`;
+  SCENES.forEach((s,i) => {
+    const a = i ? SX[i-1] : START, b = SX[i], m = (a + b) / 2, hh = 115 + (b - a) * .04;
+    h += `<path class="arc" d="M${a} ${GROUND} Q${m} ${GROUND - 2*hh} ${b} ${GROUND}" stroke="${SECTIONS[s.sec].color}"/>`;
+  });
+  SECTIONS.forEach((sec,k) => {
+    const first = SCENES.findIndex(s => s.sec === k), x = SX[first] - 80;
+    h += `<line x1="${x}" y1="${GROUND-12}" x2="${x}" y2="${GROUND+12}" stroke="${sec.color}" stroke-width="2"/>
+      <text class="seclbl" x="${x + 12}" y="${GROUND + 72}" fill="${sec.color}">${sec.roman} · ${sec.name}</text>`;
+  });
+  SCENES.forEach((s,i) => {
+    h += `<g class="dot" data-i="${i}" style="--dc:${SECTIONS[s.sec].color}"><circle cx="${SX[i]}" cy="${GROUND}" r="24" fill="transparent"/>
+      <circle class="dcore" cx="${SX[i]}" cy="${GROUND}" r="6"/><text x="${SX[i]}" y="${GROUND + 36}" text-anchor="middle">${s.label}</text></g>`;
+  });
+  h += `<circle id="ball" r="7" fill="#fff" filter="url(#glow)" opacity="0"/>`;
+  stripG.innerHTML = h;
+})();
+const arcs = [...stripG.querySelectorAll('.arc')], dots = [...stripG.querySelectorAll('.dot')], ball = $('#ball');
+const arcLen = arcs.map(a => a.getTotalLength());
+arcs.forEach((a,i) => { a.style.strokeDasharray = arcLen[i]; a.style.strokeDashoffset = arcLen[i]; });
+dots.forEach(d => d.addEventListener('click', () => userGo(+d.dataset.i)));
+
+// Kapanış sahnesi: 4 aşama pozu + tam timeline + kapanış cümlesi
+(function buildFinale(){
+  const poses = [['clipboard','Risk, kapsam, program'],['magnifier','Veri, örneklem, kanıt'],['sign','Paylaşım, uzlaşma'],['report','Rapor, sunum']];
+  let p = '';
+  poses.forEach(([prop,sub],k) => {
+    const cx = 330 + k*420, c = SECTIONS[k].color;
+    p += `<g class="pose" style="--d:${(.5 + k*.25).toFixed(2)}s;--accent:${c}">
+      <ellipse cx="${cx}" cy="650" rx="120" ry="16" fill="${c}" opacity=".22"/>
+      <g transform="translate(${cx - 80},330) scale(.8)">${charSVG(prop)}</g>
+      <text x="${cx}" y="708" text-anchor="middle" font-size="19" font-weight="700" letter-spacing="4" fill="${c}">${SECTIONS[k].roman} · ${SECTIONS[k].name}</text>
+      <text x="${cx}" y="740" text-anchor="middle" font-size="18" fill="rgba(255,255,255,.55)">${sub}</text></g>`;
+  });
+  const FX = SCENES.map((s,i) => 200 + (i + s.sec*.5) * 160), FY = 880;
+  let t = `<line x1="120" y1="${FY}" x2="1800" y2="${FY}" stroke="rgba(255,255,255,.25)" stroke-width="2"/>`;
+  SCENES.forEach((s,i) => {
+    const a = i ? FX[i-1] : 120, b = FX[i];
+    t += `<path class="dr" pathLength="1" style="--d:${(1.4 + i*.18).toFixed(2)}s;--t:.45s" d="M${a} ${FY} Q${(a+b)/2} ${FY - 110} ${b} ${FY}" stroke="${SECTIONS[s.sec].color}" stroke-width="3" fill="none" stroke-linecap="round"/>`;
+  });
+  SCENES.forEach((s,i) => {
+    t += `<g class="fdot" data-i="${i}"><circle cx="${FX[i]}" cy="${FY}" r="22" fill="transparent"/><circle class="core" cx="${FX[i]}" cy="${FY}" r="6" fill="${SECTIONS[s.sec].color}"/>
+      <text x="${FX[i]}" y="${FY + 36}" text-anchor="middle" font-size="16" fill="rgba(255,255,255,.6)">${s.label}</text></g>`;
+  });
+  SECTIONS.forEach((sec,k) => {
+    const idx = SCENES.map((s,i) => s.sec === k ? i : -1).filter(i => i >= 0);
+    const cx = (FX[idx[0]] + FX[idx[idx.length-1]]) / 2;
+    t += `<text x="${cx}" y="${FY + 76}" text-anchor="middle" class="seclbl" fill="${sec.color}">${sec.roman}</text>`;
+  });
+  finEl.innerHTML = `<svg viewBox="0 0 1920 1080" width="1920" height="1080">
+    <defs><radialGradient id="f-bg" cx="50%" cy="45%" r="75%"><stop offset="0" stop-color="#171B33"/><stop offset="1" stop-color="#06070E"/></radialGradient></defs>
+    <rect width="1920" height="1080" fill="url(#f-bg)"/>${p}${t}</svg>
+    <div class="fin-head"><div class="fin-kicker">DÖRT AŞAMA · DOKUZ ADIM</div><div class="fin-quote">${words(OUTRO.text, .3, .12)}</div></div>`;
+  finEl.querySelectorAll('.fdot').forEach(d => d.addEventListener('click', () => userGo(+d.dataset.i)));
+})();
+
+$('#introText').innerHTML = words(INTRO.text, .3, .16);
+
+// İlerleme çubuğu işaretleri
+SCENES.forEach((s,i) => {
+  const b = document.createElement('button');
+  b.className = 'tick'; b.style.left = (i / N * 100) + '%'; b.title = `${i+1}. ${s.label}`; b.setAttribute('aria-label', `${i+1}. sahne: ${s.label}`);
+  b.onclick = () => userGo(i);
+  $('#progress').appendChild(b);
+});
+
+/* =====================================================================
+   F. ZAMAN ÇİZELGESİ / DURUM MAKİNESİ
+   durumlar: -1 = açılış, 0..N-1 = sahneler, N = kapanış
+   ===================================================================== */
+const WALK = REDUCE ? 0 : WALK_MS;
+const S = { i: -2, playing: true, frozen: false, t: 0, wt: 1e9, from: CHAR_X - START, to: CHAR_X - START, tx: CHAR_X - START, back: false, last: performance.now() };
+let hudTimer = 0;
+
+const dur = i => i < 0 ? INTRO.dur : i >= N ? OUTRO.dur : SCENES[i].dur;
+
+function retrigger(el, on){                 // CSS animasyonlarını baştan başlat
+  el.classList.remove('active');
+  if (on){ void el.getBoundingClientRect(); el.classList.add('active'); }
+}
+
+function renderHUD(i){
+  const s = SCENES[i], sec = SECTIONS[s.sec];
+  clearTimeout(hudTimer);
+  hud.classList.add('out');
+  hudTimer = setTimeout(() => {
+    hud.style.setProperty('--c', sec.color);
+    hud.innerHTML = `
+      <div class="sec-label"><span class="roman">${sec.roman}</span><span class="dash"></span>${sec.name}</div>
+      <div class="bignum"><span class="num">${words(String(i+1).padStart(2,'0'), .15, 0)}</span>
+        <span class="sup"><small>AŞAMA</small><b>${s.sec+1}/4</b></span></div>
+      <div class="tag"><span class="ln"></span>${s.tag}</div>
+      <h1>${words(s.title, .4, .07)}</h1>
+      <p>${words(s.desc, .8, .03)}</p>`;
+    hud.classList.remove('out');
+  }, hud.innerHTML ? 230 : 0);
+}
+
+function go(i){
+  i = Math.max(-1, Math.min(N, i));
+  const prev = S.i;
+  S.i = i; S.t = 0;
+
+  introEl.classList.toggle('show', i === -1); retrigger(introEl, i === -1);
+  finEl.classList.toggle('show', i === N);    retrigger(finEl, i === N);
+  stage.classList.toggle('in-finale', i === N);
+  sceneEls.forEach((el,k) => { el.classList.toggle('show', k === i); retrigger(el, k === i); });
+
+  if (i >= 0 && i < N){
+    const s = SCENES[i];
+    renderHUD(i);
+    charEl.style.setProperty('--accent', SECTIONS[s.sec].color);
+    charEl.innerHTML = `<svg viewBox="0 0 200 400" width="200" height="400">${charSVG(s.prop)}</svg>`;
+    // yürüyüş: şerit, geçerli nokta karakterin altına gelecek şekilde kayar
+    S.from = S.tx; S.to = CHAR_X - SX[i]; S.wt = 0;
+    S.back = prev > i && prev < N;
+  } else if (i === -1){
+    hud.innerHTML = '';
+    S.from = S.to = S.tx = CHAR_X - START; S.wt = 1e9;
+  }
+  // yay ve nokta durumları
+  arcs.forEach((a,k) => {
+    a.classList.toggle('past', k < i); a.classList.toggle('cur', k === i);
+    if (k < i || (k === i && S.back)) a.style.strokeDashoffset = 0;
+    if (k > i) a.style.strokeDashoffset = arcLen[k];
+  });
+  dots.forEach((d,k) => { d.classList.toggle('past', k < i); d.classList.toggle('cur', k === i); });
+}
+
+// Kullanıcı gezinmesi: duraklatılmışsa otomatik ilerleme kapalı kalır, sahne animasyonu oynar
+function userGo(i){ setFrozen(false); go(i); }
+function setFrozen(v){ S.frozen = v; stage.classList.toggle('frozen', v); }
+function setPlaying(v){
+  S.playing = v;
+  setFrozen(!v);
+  $('#playIcon').setAttribute('d', v ? 'M6 4h4v16H6zM14 4h4v16h-4z' : 'M7 4v16l13-8z');
+  showControls();
+}
+function togglePlay(){
+  if (!S.playing && S.i === N && S.t >= dur(N)) { restart(); return; }
+  setPlaying(!S.playing);
+}
+function restart(){ go(-1); setPlaying(true); }
+
+function frame(now){
+  const dt = Math.min(100, now - S.last); S.last = now;
+  if (S.playing) S.t += dt;
+  if (!S.frozen) S.wt += dt;
+
+  // yürüyüş enterpolasyonu
+  const p = WALK ? Math.min(1, S.wt / WALK) : 1, e = ease(p);
+  S.tx = S.from + (S.to - S.from) * e;
+  stripG.setAttribute('transform', `translate(${S.tx.toFixed(1)},0)`);
+  const walking = p < 1 && S.to !== S.from;
+  charEl.classList.toggle('walking', walking);
+  charEl.classList.toggle('face-left', walking && S.to > S.from);
+
+  // geçerli yay çizilir, ışıklı top yay üzerinde zıplar
+  if (S.i >= 0 && S.i < N && !S.back){
+    const a = arcs[S.i], L = arcLen[S.i];
+    a.style.strokeDashoffset = L * (1 - e);
+    const pt = a.getPointAtLength(L * e);
+    ball.setAttribute('cx', pt.x); ball.setAttribute('cy', pt.y);
+    ball.setAttribute('opacity', p < 1 ? 1 : 0);
+  } else ball.setAttribute('opacity', 0);
+
+  // ilerleme çubuğu
+  const prog = S.i < 0 ? 0 : S.i >= N ? 1 : (S.i + Math.min(1, S.t / dur(S.i))) / N;
+  fillEl.style.width = (prog * 100) + '%';
+
+  // otomatik sahne geçişi
+  if (S.playing && S.t >= dur(S.i)){
+    if (S.i < N) go(S.i + 1);
+    else setPlaying(false);
+  }
+  requestAnimationFrame(frame);
+}
+
+/* =====================================================================
+   G. KONTROLLER, KLAVYE, ÖLÇEKLEME
+   ===================================================================== */
+$('#bPlay').onclick = togglePlay;
+$('#bPrev').onclick = () => userGo(S.i - 1);
+$('#bNext').onclick = () => userGo(S.i + 1);
+$('#bRestart').onclick = restart;
+$('#bFull').onclick = toggleFull;
+function toggleFull(){
+  if (!document.fullscreenElement) document.documentElement.requestFullscreen?.();
+  else document.exitFullscreen?.();
+}
+addEventListener('keydown', e => {
+  if (e.code === 'Space'){ e.preventDefault(); togglePlay(); }
+  else if (e.key === 'ArrowRight'){ e.preventDefault(); userGo(S.i + 1); }
+  else if (e.key === 'ArrowLeft'){ e.preventDefault(); userGo(S.i - 1); }
+  else if (e.key === 'r' || e.key === 'R') restart();
+  else if (e.key === 'f' || e.key === 'F') toggleFull();
+});
+
+// Kontroller fare hareketsiz kalınca gizlenir (sunum modu)
+let idleTimer = 0;
+function showControls(){
+  stage.classList.remove('idle');
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => { if (S.playing) stage.classList.add('idle'); }, 2600);
+}
+addEventListener('mousemove', showControls);
+
+function fit(){
+  const s = Math.min(innerWidth / 1920, innerHeight / 1080);
+  stage.style.transform = `translate(-50%,-50%) scale(${s})`;
+}
+addEventListener('resize', fit);
+fit();
+
+// Başlat
+go(-1);
+setPlaying(true);
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
